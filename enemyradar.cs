@@ -58,6 +58,10 @@ namespace enemyradar
         private Texture2D _ring4Texture;   // 4번: 점선 아크
         private bool _texReady;
 
+        // ===== 디버그 텍스트 스타일 =====
+        private GUIStyle _labelStyle;
+        private bool _styleReady;
+
         // ===== team 필드 캐시 =====
         private readonly Dictionary<Type, FieldInfo> _teamFieldCache = new Dictionary<Type, FieldInfo>();
 
@@ -91,6 +95,8 @@ namespace enemyradar
         {
             if (!_texReady)
                 BuildTextures();
+            if (!_styleReady)
+                BuildStyle();
             if (_radarTexture == null)
                 return;
 
@@ -158,8 +164,31 @@ namespace enemyradar
                 }
             }
 
-            // 색상 복구하고 끝
+            // 색상 복구
             GUI.color = prevColor;
+
+            // 3) 디버그 텍스트 (레이더 왼쪽)
+            Rect textRect = new Rect(radarRect.x - 220f, radarRect.y, 210f, radarRect.height);
+
+            if (_hasTarget && _nearestEnemy != null)
+            {
+                string ringText = "4번(멀다)";
+                float d = _nearestDist;
+                if (d <= _ring2DistanceMax) ringText = "2번(가까움)";
+                else if (d <= _ring3DistanceMax) ringText = "3번(중간)";
+
+                string info =
+                    "타깃: " + SafeGetName(_nearestEnemy) + "\n" +
+                    "적 수: " + _enemies.Count + "\n" +
+                    "거리: " + _nearestDist.ToString("F1") + "m\n" +
+                    "링: " + ringText;
+
+                GUI.Label(textRect, info, _labelStyle);
+            }
+            else
+            {
+                GUI.Label(textRect, "타깃 없음\n적 수: " + _enemies.Count, _labelStyle);
+            }
         }
 
         // ================== 캐릭터 스캔 ==================
@@ -229,25 +258,41 @@ namespace enemyradar
                     isPetHere = true;
                 }
 
-                // 이름/타입에 brokenwall / breakablewall / sandbag / cover / barricade
-                if (trNameLower.Contains("brokenwall")     ||
-                    trNameLower.Contains("breakablewall")  ||
-                    trNameLower.Contains("sandbag")        ||
-                    trNameLower.Contains("sand bag")       ||
-                    trNameLower.Contains("coverwall")      ||
-                    trNameLower.Contains("cover_wall")     ||
-                    trNameLower.Contains("cover")          ||
-                    trNameLower.Contains("barricade")      ||
-                    typeLower.Contains("brokenwall")       ||
-                    typeLower.Contains("breakablewall")    ||
-                    typeLower.Contains("sandbag")          ||
-                    typeLower.Contains("sand bag")         ||
-                    typeLower.Contains("coverwall")        ||
-                    typeLower.Contains("cover_wall")       ||
-                    typeLower.Contains("cover")            ||
-                    typeLower.Contains("barricade"))
-                {
-                    isEnvHere = true;
+               
+               // 이름/타입에 brokenwall / breakablewall / sandbag / cover / barricade
+// + TombStone / Explosive_oilBarrel_25 / TestHalfObsticle_18 계열
+if (trNameLower.Contains("brokenwall")        ||
+    trNameLower.Contains("breakablewall")     ||
+    trNameLower.Contains("sandbag")           ||
+    trNameLower.Contains("sand bag")          ||
+    trNameLower.Contains("coverwall")         ||
+    trNameLower.Contains("cover_wall")        ||
+    trNameLower.Contains("cover")             ||
+    trNameLower.Contains("barricade")         ||
+    trNameLower.Contains("tombstone")         ||
+    trNameLower.Contains("explosive_oilbarrel_25") ||
+    trNameLower.Contains("explosive_oilbarrel")    ||
+    trNameLower.Contains("oilbarrel")         ||
+    trNameLower.Contains("testhalfobsticle_18")    ||
+    trNameLower.Contains("halfobsticle")      ||
+    trNameLower.Contains("obsticle")          ||
+    typeLower.Contains("brokenwall")          ||
+    typeLower.Contains("breakablewall")       ||
+    typeLower.Contains("sandbag")             ||
+    typeLower.Contains("sand bag")            ||
+    typeLower.Contains("coverwall")           ||
+    typeLower.Contains("cover_wall")          ||
+    typeLower.Contains("cover")               ||
+    typeLower.Contains("barricade")           ||
+    typeLower.Contains("tombstone")           ||
+    typeLower.Contains("explosive_oilbarrel_25") ||
+    typeLower.Contains("explosive_oilbarrel")    ||
+    typeLower.Contains("oilbarrel")           ||
+    typeLower.Contains("testhalfobsticle_18") ||
+    typeLower.Contains("halfobsticle")        ||
+    typeLower.Contains("obsticle"))
+{
+    isEnvHere = true;
                 }
 
                 FieldInfo tf = GetTeamField(mb.GetType());
@@ -478,7 +523,7 @@ namespace enemyradar
             return string.IsNullOrEmpty(n) ? "(noname)" : n;
         }
 
-        // ================== 텍스처 빌드 ==================
+        // ================== 텍스처 / 스타일 빌드 ==================
 
         private void BuildTextures()
         {
@@ -511,6 +556,15 @@ namespace enemyradar
                 red);
 
             _texReady = true;
+        }
+
+        private void BuildStyle()
+        {
+            _labelStyle = new GUIStyle(GUI.skin.label);
+            _labelStyle.fontSize = 18;
+            _labelStyle.normal.textColor = Color.white;
+            _labelStyle.alignment = TextAnchor.UpperLeft;
+            _styleReady = true;
         }
 
         private Texture2D BuildRadarBackground(int size)
