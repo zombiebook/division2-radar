@@ -101,13 +101,14 @@ namespace enemyradar
                 return;
 
             float size   = 200f;
-            float margin = 20f;
+float margin = 20f;
 
-            // ↓ 레이더 위치 (Y에서 80만큼 위로 올림)
-            float radarX = Screen.width  - size - margin;
-            float radarY = Screen.height - size - margin - 80f;
+// ↓ 레이더 위치: 오른쪽 중앙 근처
+float radarX = Screen.width - size - margin;
+float radarY = (Screen.height * 0.5f) - (size * 0.5f);
 
-            Rect radarRect = new Rect(radarX, radarY, size, size);
+Rect radarRect = new Rect(radarX, radarY, size, size);
+
 
             Color prevColor = GUI.color;
 
