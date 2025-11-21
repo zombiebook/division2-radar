@@ -40,12 +40,12 @@ namespace enemyradar
         private Transform _nearestEnemy;
         private float _nearestDist;
         private float _normalizedDist;
-        private float _enemyAngleDeg; // 플레이어 기준 적 방향(도) - 앞이 0
+        private float _enemyAngleDeg; // (디버그용) 가장 가까운 적 방향
 
         // ===== 거리 기준 (미터) =====
         // 0 ~ 7m    -> 2번 링 (가까움, 빨간 도넛 링)
         // 7 ~ 20m   -> 3번 링 (중간, 실선 피자조각)
-        // 20m 이상  -> 4번 링 (멀다, 점선 아크)
+        // 20 ~ 35m  -> 4번 링 (멀다, 점선 아크)
         private float _ring2DistanceMax = 7f;
         private float _ring3DistanceMax = 20f;
         private float _ring4DistanceMax = 35f;
@@ -64,6 +64,10 @@ namespace enemyradar
 
         // ===== team 필드 캐시 =====
         private readonly Dictionary<Type, FieldInfo> _teamFieldCache = new Dictionary<Type, FieldInfo>();
+
+        // ===== 다수 각도 캐시 (3번/4번 링용) =====
+        private readonly List<float> _midAngles = new List<float>();
+        private readonly List<float> _farAngles = new List<float>();
 
         // Transform 요약 정보
         private class CharacterInfo
@@ -101,14 +105,13 @@ namespace enemyradar
                 return;
 
             float size   = 200f;
-float margin = 20f;
+            float margin = 20f;
 
-// ↓ 레이더 위치: 오른쪽 중앙 근처
-float radarX = Screen.width - size - margin;
-float radarY = (Screen.height * 0.5f) - (size * 0.5f);
+            // ↓ 레이더 위치: 원래 쓰던 오른쪽 아래 (살짝 위로)
+            float radarX = Screen.width  - size - margin;
+            float radarY = Screen.height - size - margin - 80f;
 
-Rect radarRect = new Rect(radarX, radarY, size, size);
-
+            Rect radarRect = new Rect(radarX, radarY, size, size);
 
             Color prevColor = GUI.color;
 
@@ -116,57 +119,120 @@ Rect radarRect = new Rect(radarX, radarY, size, size);
             GUI.color = Color.white;
             GUI.DrawTexture(radarRect, _radarTexture);
 
-            // 2) 링 표시
-            if (_hasTarget)
+            // 2) 링 표시 (다수 적 지원)
+            if (_player != null && _enemies.Count > 0)
             {
                 float pulse = 0.5f + 0.5f * Mathf.Sin(Time.time * 4f);
                 float alpha = Mathf.Lerp(0.5f, 1.0f, pulse);
                 GUI.color   = new Color(1f, 1f, 1f, alpha);
 
-                float d = _nearestDist;
-                Texture2D overlay = null;
-                int ringIndex;
+                Vector3 playerPos = _player.position;
 
-                if (d <= _ring2DistanceMax)
-                {
-                    overlay = _ring2Texture;   // 2번: 도넛 링
-                    ringIndex = 2;
-                }
-                else if (d <= _ring3DistanceMax)
-                {
-                    overlay = _ring3Texture;   // 3번: 실선 피자조각
-                    ringIndex = 3;
-                }
+                // 플레이어/카메라 전방
+                Vector3 fwd;
+                if (Camera.main != null)
+                    fwd = Camera.main.transform.forward;
                 else
+                    fwd = _player.forward;
+
+                fwd.y = 0f;
+                if (fwd.sqrMagnitude < 0.0001f)
+                    fwd = Vector3.forward;
+                fwd.Normalize();
+                float fwdAngle = Mathf.Atan2(fwd.x, fwd.z) * Mathf.Rad2Deg;
+
+                bool hasRing2 = false;
+                _midAngles.Clear();
+                _farAngles.Clear();
+
+                // 각 적 위치에 따라 링 분류
+                for (int i = 0; i < _enemies.Count; i++)
                 {
-                    overlay = _ring4Texture;   // 4번: 점선 아크
-                    ringIndex = 4;
+                    Transform tr = _enemies[i];
+                    if (tr == null) continue;
+
+                    Vector3 toEnemy = tr.position - playerPos;
+                    float distance = toEnemy.magnitude;
+
+                    if (distance <= _ring2DistanceMax)
+                    {
+                        // 2번 영역(가까움) 존재 여부만 체크
+                        hasRing2 = true;
+                        continue;
+                    }
+
+                    if (distance <= _ring3DistanceMax)
+                    {
+                        // 3번 영역(중간) → 실선 피자조각 여러 개
+                        toEnemy.y = 0f;
+                        if (toEnemy.sqrMagnitude < 0.0001f)
+                            continue;
+                        toEnemy.Normalize();
+
+                        float enAngle = Mathf.Atan2(toEnemy.x, toEnemy.z) * Mathf.Rad2Deg;
+                        float rel = Mathf.DeltaAngle(fwdAngle, enAngle); // -180~180, 앞이 0
+                        _midAngles.Add(rel);
+                    }
+                    else if (distance <= _ring4DistanceMax)
+                    {
+                        // 4번 영역(멀다) → 점선 아크 여러 개
+                        toEnemy.y = 0f;
+                        if (toEnemy.sqrMagnitude < 0.0001f)
+                            continue;
+                        toEnemy.Normalize();
+
+                        float enAngle = Mathf.Atan2(toEnemy.x, toEnemy.z) * Mathf.Rad2Deg;
+                        float rel = Mathf.DeltaAngle(fwdAngle, enAngle);
+                        _farAngles.Add(rel);
+                    }
                 }
 
-                if (overlay != null)
+                // 2번 링: 근접 적이 하나라도 있으면 중앙에 도넛 한 개
+                if (hasRing2 && _ring2Texture != null)
                 {
-                    if (ringIndex == 2)
+                    GUI.DrawTexture(radarRect, _ring2Texture);
+                }
+
+                // 3번 링: 중거리 적들 전부 방향별로 피자조각
+                if (_ring3Texture != null)
+                {
+                    for (int i = 0; i < _midAngles.Count; i++)
                     {
-                        // 2번 링: 방향 고정 (위쪽)
-                        GUI.DrawTexture(radarRect, overlay);
-                    }
-                    else
-                    {
-                        // 3번 / 4번 링: 적 방향으로 회전
-                        Matrix4x4 prevMatrix2 = GUI.matrix;
+                        float angle = _midAngles[i];
+                        Matrix4x4 prevMatrix = GUI.matrix;
                         Vector2 pivot = new Vector2(
                             radarRect.x + radarRect.width * 0.5f,
                             radarRect.y + radarRect.height * 0.5f);
 
-                        GUIUtility.RotateAroundPivot(_enemyAngleDeg, pivot);
-                        GUI.DrawTexture(radarRect, overlay);
-                        GUI.matrix = prevMatrix2;
+                        GUIUtility.RotateAroundPivot(angle, pivot);
+                        GUI.DrawTexture(radarRect, _ring3Texture);
+                        GUI.matrix = prevMatrix;
                     }
                 }
-            }
 
-            // 색상 복구
-            GUI.color = prevColor;
+                // 4번 링: 먼 적들 방향별 점선 아크 (조금 더 짧은 아크)
+                if (_ring4Texture != null)
+                {
+                    for (int i = 0; i < _farAngles.Count; i++)
+                    {
+                        float angle = _farAngles[i];
+                        Matrix4x4 prevMatrix = GUI.matrix;
+                        Vector2 pivot = new Vector2(
+                            radarRect.x + radarRect.width * 0.5f,
+                            radarRect.y + radarRect.height * 0.5f);
+
+                        GUIUtility.RotateAroundPivot(angle, pivot);
+                        GUI.DrawTexture(radarRect, _ring4Texture);
+                        GUI.matrix = prevMatrix;
+                    }
+                }
+
+                GUI.color = prevColor;
+            }
+            else
+            {
+                GUI.color = prevColor;
+            }
 
             // 3) 디버그 텍스트 (레이더 왼쪽)
             Rect textRect = new Rect(radarRect.x - 220f, radarRect.y, 210f, radarRect.height);
@@ -237,7 +303,7 @@ Rect radarRect = new Rect(radarX, radarY, size, size);
             // Transform -> CharacterInfo
             Dictionary<Transform, CharacterInfo> map = new Dictionary<Transform, CharacterInfo>();
 
-            // pet / 환경물(브로큰월, 모래주머니, 커버 등) Transform 및 그 부모 전체
+            // pet / 환경물(브로큰월, 모래주머니, 커버, TombStone, 드럼통 등) Transform 및 그 부모 전체
             HashSet<Transform> envHierarchy = new HashSet<Transform>();
 
             foreach (MonoBehaviour mb in all)
@@ -251,7 +317,7 @@ Rect radarRect = new Rect(radarX, radarY, size, size);
                 string typeLower   = mb.GetType().Name.ToLower();
 
                 bool isPetHere = false;
-                bool isEnvHere = false; // BrokenWall / Sandbag / Cover 등
+                bool isEnvHere = false; // BrokenWall / Sandbag / Cover / TombStone / Barrel 등
 
                 // 이름/타입에 pet
                 if (trNameLower.Contains("pet") || typeLower.Contains("pet"))
@@ -259,41 +325,39 @@ Rect radarRect = new Rect(radarX, radarY, size, size);
                     isPetHere = true;
                 }
 
-               
-               // 이름/타입에 brokenwall / breakablewall / sandbag / cover / barricade
-// + TombStone / Explosive_oilBarrel_25 / TestHalfObsticle_18 계열
-if (trNameLower.Contains("brokenwall")        ||
-    trNameLower.Contains("breakablewall")     ||
-    trNameLower.Contains("sandbag")           ||
-    trNameLower.Contains("sand bag")          ||
-    trNameLower.Contains("coverwall")         ||
-    trNameLower.Contains("cover_wall")        ||
-    trNameLower.Contains("cover")             ||
-    trNameLower.Contains("barricade")         ||
-    trNameLower.Contains("tombstone")         ||
-    trNameLower.Contains("explosive_oilbarrel_25") ||
-    trNameLower.Contains("explosive_oilbarrel")    ||
-    trNameLower.Contains("oilbarrel")         ||
-    trNameLower.Contains("testhalfobsticle_18")    ||
-    trNameLower.Contains("halfobsticle")      ||
-    trNameLower.Contains("obsticle")          ||
-    typeLower.Contains("brokenwall")          ||
-    typeLower.Contains("breakablewall")       ||
-    typeLower.Contains("sandbag")             ||
-    typeLower.Contains("sand bag")            ||
-    typeLower.Contains("coverwall")           ||
-    typeLower.Contains("cover_wall")          ||
-    typeLower.Contains("cover")               ||
-    typeLower.Contains("barricade")           ||
-    typeLower.Contains("tombstone")           ||
-    typeLower.Contains("explosive_oilbarrel_25") ||
-    typeLower.Contains("explosive_oilbarrel")    ||
-    typeLower.Contains("oilbarrel")           ||
-    typeLower.Contains("testhalfobsticle_18") ||
-    typeLower.Contains("halfobsticle")        ||
-    typeLower.Contains("obsticle"))
-{
-    isEnvHere = true;
+                // 이름/타입으로 환경물 판정
+                if (trNameLower.Contains("brokenwall")        ||
+                    trNameLower.Contains("breakablewall")     ||
+                    trNameLower.Contains("sandbag")           ||
+                    trNameLower.Contains("sand bag")          ||
+                    trNameLower.Contains("coverwall")         ||
+                    trNameLower.Contains("cover_wall")        ||
+                    trNameLower.Contains("cover")             ||
+                    trNameLower.Contains("barricade")         ||
+                    trNameLower.Contains("tombstone")         ||
+                    trNameLower.Contains("explosive_oilbarrel_25") ||
+                    trNameLower.Contains("explosive_oilbarrel")    ||
+                    trNameLower.Contains("oilbarrel")         ||
+                    trNameLower.Contains("testhalfobsticle_18")    ||
+                    trNameLower.Contains("halfobsticle")      ||
+                    trNameLower.Contains("obsticle")          ||
+                    typeLower.Contains("brokenwall")          ||
+                    typeLower.Contains("breakablewall")       ||
+                    typeLower.Contains("sandbag")             ||
+                    typeLower.Contains("sand bag")            ||
+                    typeLower.Contains("coverwall")           ||
+                    typeLower.Contains("cover_wall")          ||
+                    typeLower.Contains("cover")               ||
+                    typeLower.Contains("barricade")           ||
+                    typeLower.Contains("tombstone")           ||
+                    typeLower.Contains("explosive_oilbarrel_25") ||
+                    typeLower.Contains("explosive_oilbarrel")    ||
+                    typeLower.Contains("oilbarrel")           ||
+                    typeLower.Contains("testhalfobsticle_18") ||
+                    typeLower.Contains("halfobsticle")        ||
+                    typeLower.Contains("obsticle"))
+                {
+                    isEnvHere = true;
                 }
 
                 FieldInfo tf = GetTeamField(mb.GetType());
@@ -306,16 +370,26 @@ if (trNameLower.Contains("brokenwall")        ||
                     if (lowerTeam.Contains("pet"))
                         isPetHere = true;
 
-                    if (lowerTeam.Contains("brokenwall")    ||
-                        lowerTeam.Contains("breakablewall") ||
-                        lowerTeam.Contains("sandbag")       ||
-                        lowerTeam.Contains("sand bag")      ||
-                        lowerTeam.Contains("cover")         ||
-                        lowerTeam.Contains("barricade"))
+                    if (lowerTeam.Contains("brokenwall")        ||
+                        lowerTeam.Contains("breakablewall")     ||
+                        lowerTeam.Contains("sandbag")           ||
+                        lowerTeam.Contains("sand bag")          ||
+                        lowerTeam.Contains("cover")             ||
+                        lowerTeam.Contains("barricade")         ||
+                        lowerTeam.Contains("tombstone")         ||
+                        lowerTeam.Contains("explosive_oilbarrel_25") ||
+                        lowerTeam.Contains("explosive_oilbarrel")    ||
+                        lowerTeam.Contains("oilbarrel")         ||
+                        lowerTeam.Contains("testhalfobsticle_18")    ||
+                        lowerTeam.Contains("halfobsticle")      ||
+                        lowerTeam.Contains("obsticle"))
+                    {
                         isEnvHere = true;
+                    }
                 }
 
-                // 펫 / 환경물(모래주머니, 커버, 브로큰월 등)은 트랜스폼 + 부모 전부 무시 목록에 포함
+                // 펫 / 환경물(모래주머니, 커버, 브로큰월, TombStone, Barrel 등)은
+                // 트랜스폼 + 부모 전부 무시 목록에 포함
                 if (isPetHere || isEnvHere)
                 {
                     Transform p = tr;
@@ -379,7 +453,7 @@ if (trNameLower.Contains("brokenwall")        ||
                 CharacterInfo info = kv.Value;
                 if (!info.HasTeam) continue;
                 if (info.Tr == null) continue;
-                if (envHierarchy.Contains(info.Tr)) continue; // 펫 + 모래주머니 + 브로큰월 + 커버 등 제거
+                if (envHierarchy.Contains(info.Tr)) continue; // 펫 + 환경물 제거
 
                 chars.Add(info);
             }
@@ -490,7 +564,7 @@ if (trNameLower.Contains("brokenwall")        ||
                 if (_maxRadarDistance <= 0f) _maxRadarDistance = 1f;
                 _normalizedDist = Mathf.Clamp01(_nearestDist / _maxRadarDistance);
 
-                // 적 방향 계산 (수평면 기준, 플레이어/카메라 전방 기준)
+                // (디버그용) 가장 가까운 적 방향도 계산해 둔다
                 Vector3 toEnemy = bestEnemy.position - playerPos;
                 toEnemy.y = 0f;
                 if (toEnemy.sqrMagnitude > 0.0001f)
@@ -510,7 +584,7 @@ if (trNameLower.Contains("brokenwall")        ||
 
                     float fwdAngle = Mathf.Atan2(fwd.x, fwd.z) * Mathf.Rad2Deg;
                     float enAngle  = Mathf.Atan2(toEnemy.x, toEnemy.z) * Mathf.Rad2Deg;
-                    float rel      = Mathf.DeltaAngle(fwdAngle, enAngle); // -180~180, 앞이 0
+                    float rel      = Mathf.DeltaAngle(fwdAngle, enAngle);
 
                     _enemyAngleDeg = rel;
                 }
@@ -547,11 +621,11 @@ if (trNameLower.Contains("brokenwall")        ||
                 40f,
                 red);
 
-            // 4번 링: 바깥 점선 아크
+            // 4번 링: 바깥 점선 아크 (조금 더 짧게: halfAngle 45)
             _ring4Texture = BuildSegmentedArcTexture(
                 size,
                 0.80f, 0.88f,
-                80f,
+                45f,      // <- 80 → 60 → 45로 줄인 값 (조금 더 짧게)
                 9,
                 0.65f,
                 red);
