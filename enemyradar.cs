@@ -1,6 +1,8 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using ItemStatsSystem;
 using UnityEngine;
 
 namespace enemyradar
@@ -30,13 +32,18 @@ namespace enemyradar
     internal class EnemyRadarHUD : MonoBehaviour
     {
         // ===== 플레이어 / 적 추적 =====
-        private Transform _player;
+                private Transform _player;
         private readonly List<Transform> _enemies = new List<Transform>();
 
-        private float _nextScanTime;
-        private const float ScanInterval = 3f;
+        // 적 / 전리품 스캔 타이머를 분리
+        private float _nextEnemyScanTime;
+        private float _nextLootScanTime;
+
+        private const float EnemyScanInterval = 3f;   // 적 레이더: 3초마다
+        private const float LootScanInterval  = 0.5f; // 전리품 빔: 0.5초마다
 
         private bool _hasTarget;
+
         private Transform _nearestEnemy;
         private float _nearestDist;
         private float _normalizedDist;
@@ -56,6 +63,8 @@ namespace enemyradar
         private Texture2D _ring2Texture;   // 2번: 빨간 도넛 링
         private Texture2D _ring3Texture;   // 3번: 실선 피자조각
         private Texture2D _ring4Texture;   // 4번: 점선 아크
+        private Texture2D _lootDotTexture; // 전리품 점용 동그라미
+
         private bool _texReady;
 
         // ===== 디버그 텍스트 스타일 =====
@@ -79,21 +88,76 @@ namespace enemyradar
             public bool IsEnemyTeam;
         }
 
+        // ===== 적 전리품 전용 정보 =====
+        private class LootSpot
+        {
+            public Transform Tr;
+            public int Tier; // 0=흰, 1=초록, 2=파랑, 3=보라, 4=금, 5=연빨, 6=진빨
+        }
+
+        private readonly List<LootSpot> _enemyLootSpots = new List<LootSpot>();
+
+        // ───── 전리품 빔 월드 이펙트 ─────
+        private GameObject _lootBeamRoot;
+        private static Material _lootBeamMaterial;
+        private readonly List<GameObject> _lootBeams = new List<GameObject>();
+
+        // 빔 모양 설정값
+        private float _lootBeamHeight  = 6f;    // 빔 높이
+        private float _lootBeamWidth   = 0.25f; // 굵기
+        private float _lootBeamOffsetY = 0.2f;  // 가방 위로 살짝 띄우기
+
+
+
         private void Start()
         {
             Debug.Log("[EnemyRadarHUD] Start - 준비 완료");
+
+            // 전리품 빔 루트 오브젝트
+            if (_lootBeamRoot == null)
+            {
+                _lootBeamRoot = new GameObject("EnemyLootBeamsRoot");
+                UnityEngine.Object.DontDestroyOnLoad(_lootBeamRoot);
+            }
+
+            // 빔용 머티리얼 (Unlit/Color 우선, 없으면 Sprites/Default)
+            if (_lootBeamMaterial == null)
+            {
+                Shader shader = Shader.Find("Unlit/Color");
+                if (shader == null)
+                    shader = Shader.Find("Sprites/Default");
+
+                if (shader != null)
+                {
+                    _lootBeamMaterial = new Material(shader);
+                    _lootBeamMaterial.renderQueue = 3000; // 투명 계열
+                }
+            }
         }
 
-        private void Update()
+               private void Update()
         {
-            if (Time.time >= _nextScanTime)
+            float now = Time.time;
+
+            // 적 / 플레이어 스캔 (3초마다)
+            if (now >= _nextEnemyScanTime)
             {
-                _nextScanTime = Time.time + ScanInterval;
+                _nextEnemyScanTime = now + EnemyScanInterval;
                 ScanCharacters();
             }
 
+            // 전리품 가방 + 빔 스캔 (0.5초마다)
+            if (now >= _nextLootScanTime)
+            {
+                _nextLootScanTime = now + LootScanInterval;
+                ScanLootWorld();
+            }
+
+            // 가장 가까운 적은 매 프레임 갱신
             UpdateNearestEnemy();
         }
+
+
 
         private void OnGUI()
         {
@@ -107,7 +171,7 @@ namespace enemyradar
             float size   = 200f;
             float margin = 20f;
 
-            // ↓ 레이더 위치: 원래 쓰던 오른쪽 아래 (살짝 위로)
+            // ↓ 레이더 위치: 오른쪽 아래 (살짝 위로)
             float radarX = Screen.width  - size - margin;
             float radarY = Screen.height - size - margin - 80f;
 
@@ -119,17 +183,18 @@ namespace enemyradar
             GUI.color = Color.white;
             GUI.DrawTexture(radarRect, _radarTexture);
 
-            // 2) 링 표시 (다수 적 지원)
-            if (_player != null && _enemies.Count > 0)
+            // ─────────────────────────────────────
+            // 카메라/플레이어 전방 벡터 미리 계산
+            // ─────────────────────────────────────
+            bool hasPlayer = (_player != null);
+            Vector3 playerPos = Vector3.zero;
+            Vector3 fwd = Vector3.forward;
+            float fwdAngle = 0f;
+
+            if (hasPlayer)
             {
-                float pulse = 0.5f + 0.5f * Mathf.Sin(Time.time * 4f);
-                float alpha = Mathf.Lerp(0.5f, 1.0f, pulse);
-                GUI.color   = new Color(1f, 1f, 1f, alpha);
+                playerPos = _player.position;
 
-                Vector3 playerPos = _player.position;
-
-                // 플레이어/카메라 전방
-                Vector3 fwd;
                 if (Camera.main != null)
                     fwd = Camera.main.transform.forward;
                 else
@@ -138,8 +203,17 @@ namespace enemyradar
                 fwd.y = 0f;
                 if (fwd.sqrMagnitude < 0.0001f)
                     fwd = Vector3.forward;
+
                 fwd.Normalize();
-                float fwdAngle = Mathf.Atan2(fwd.x, fwd.z) * Mathf.Rad2Deg;
+                fwdAngle = Mathf.Atan2(fwd.x, fwd.z) * Mathf.Rad2Deg;
+            }
+
+            // 2) 링 표시 (다수 적 지원) - ★ 백업본 구조 그대로 ★
+            if (hasPlayer && _enemies.Count > 0)
+            {
+                float pulse = 0.5f + 0.5f * Mathf.Sin(Time.time * 4f);
+                float alpha = Mathf.Lerp(0.5f, 1.0f, pulse);
+                GUI.color   = new Color(1f, 1f, 1f, alpha);
 
                 bool hasRing2 = false;
                 _midAngles.Clear();
@@ -210,7 +284,7 @@ namespace enemyradar
                     }
                 }
 
-                // 4번 링: 먼 적들 방향별 점선 아크 (조금 더 짧은 아크)
+                // 4번 링: 먼 적들 방향별 점선 아크
                 if (_ring4Texture != null)
                 {
                     for (int i = 0; i < _farAngles.Count; i++)
@@ -234,7 +308,66 @@ namespace enemyradar
                 GUI.color = prevColor;
             }
 
-            // 3) 디버그 텍스트 (레이더 왼쪽)
+            // ─────────────────────────────────────
+            // 3) 전리품 점(가방) 찍기
+            //    - 적이 죽어서 떨어진 LootBox_EnemyDie_Template 만 사용
+            //    - 상자 안의 "가장 높은 displayQuality" 로 색 결정
+            // ─────────────────────────────────────
+            if (hasPlayer && _enemyLootSpots.Count > 0 && _lootDotTexture != null)
+            {
+                float centerX = radarRect.x + radarRect.width * 0.5f;
+                float centerY = radarRect.y + radarRect.height * 0.5f;
+
+                for (int i = 0; i < _enemyLootSpots.Count; i++)
+                {
+                    LootSpot spot = _enemyLootSpots[i];
+                    if (spot == null || spot.Tr == null)
+                        continue;
+
+                    int tier = spot.Tier;
+                    // 등급 0 (흰색) 은 너무 지저분해질 수 있으니, 1 이상만 점 찍기
+                    if (tier <= 2)
+                        continue;
+
+                    Vector3 toLoot = spot.Tr.position - playerPos;
+                    toLoot.y = 0f;
+                    float dist = toLoot.magnitude;
+                    if (dist < 0.1f)
+                        continue;
+                    if (dist > _maxRadarDistance * 1.2f)
+                        continue;
+
+                    // 플레이어 전방 기준 각도
+                    toLoot.Normalize();
+                    float lootAngle = Mathf.Atan2(toLoot.x, toLoot.z) * Mathf.Rad2Deg;
+                    float relAngle = Mathf.DeltaAngle(fwdAngle, lootAngle);
+
+                    // 거리 → 반지름 (레이더 안쪽~바깥쪽까지)
+                    float t = Mathf.Clamp01(dist / _maxRadarDistance);
+                    // 0.25 ~ 0.9 사이에서 움직이게 (너무 가운데/테두리에 안붙게)
+                    float radiusNorm = 0.25f + 0.65f * t;
+                    float radarRadius = (radarRect.width * 0.5f) * radiusNorm;
+
+                    // 각도 → 화면 좌표 (앞: 위쪽)
+                    float rad = (90f - relAngle) * Mathf.Deg2Rad;
+                    float px = centerX + Mathf.Cos(rad) * radarRadius;
+                    float py = centerY - Mathf.Sin(rad) * radarRadius;
+
+                    float dotSize = 7f;
+                    Rect dotRect = new Rect(
+                        px - dotSize * 0.5f,
+                        py - dotSize * 0.5f,
+                        dotSize,
+                        dotSize);
+
+                    Color old = GUI.color;
+                    GUI.color = GetLootColorByTier(tier);
+                    GUI.DrawTexture(dotRect, _lootDotTexture);
+                    GUI.color = old;
+                }
+            }
+
+            // 4) 디버그 텍스트 (레이더 왼쪽)
             Rect textRect = new Rect(radarRect.x - 220f, radarRect.y, 210f, radarRect.height);
 
             if (_hasTarget && _nearestEnemy != null)
@@ -564,7 +697,7 @@ namespace enemyradar
                 if (_maxRadarDistance <= 0f) _maxRadarDistance = 1f;
                 _normalizedDist = Mathf.Clamp01(_nearestDist / _maxRadarDistance);
 
-                // (디버그용) 가장 가까운 적 방향도 계산해 둔다
+                // (디버그용) 가장 가까운 적 방향
                 Vector3 toEnemy = bestEnemy.position - playerPos;
                 toEnemy.y = 0f;
                 if (toEnemy.sqrMagnitude > 0.0001f)
@@ -598,9 +731,337 @@ namespace enemyradar
             return string.IsNullOrEmpty(n) ? "(noname)" : n;
         }
 
+        // ================== 전리품 스캔 ==================
+
+        private void ScanLootWorld()
+        {
+            _enemyLootSpots.Clear();
+            ClearAllLootBeams();
+
+            GameObject[] allGos = UnityEngine.Object.FindObjectsOfType<GameObject>();
+            if (allGos == null || allGos.Length == 0)
+            {
+                Debug.Log("[EnemyRadarHUD] ScanLootWorld - GameObject 없음");
+                return;
+            }
+
+            int lootCount = 0;
+
+            for (int i = 0; i < allGos.Length; i++)
+            {
+                GameObject go = allGos[i];
+                if (go == null) continue;
+
+                string name = go.name;
+                if (string.IsNullOrEmpty(name)) continue;
+
+                string lowerName = name.ToLower();
+
+                // ★ 적이 죽어서 떨어지는 전리품 가방만: LootBox_EnemyDie_Template(Clone)
+                if (!lowerName.Contains("lootbox_enemydie_template"))
+                    continue;
+
+                Transform tr = go.transform;
+                if (tr == null) continue;
+
+                int bestQ = GetMaxQualityFromGameObject(go);
+
+                LootSpot spot = new LootSpot();
+                spot.Tr = tr;
+                spot.Tier = bestQ;
+
+                _enemyLootSpots.Add(spot);
+                lootCount++;
+
+                CreateLootBeamForSpot(spot);
+
+                Debug.Log("[EnemyRadarHUD] LootSpot - name=" + name +
+                          ", scene=" + go.scene.name +
+                          ", bestQ=" + bestQ);
+            }
+
+            Debug.Log("[EnemyRadarHUD] ScanLootWorld - enemyLoot count=" + lootCount);
+        }
+
+        private int GetMaxQualityFromGameObject(GameObject go)
+        {
+            if (go == null) return 0;
+
+            int best = 0;
+
+            MonoBehaviour[] mbs = go.GetComponents<MonoBehaviour>();
+            if (mbs == null || mbs.Length == 0)
+                return 0;
+
+            for (int i = 0; i < mbs.Length; i++)
+            {
+                MonoBehaviour mb = mbs[i];
+                if (mb == null) continue;
+
+                int q = GetMaxQualityFromComponent(mb);
+                if (q > best) best = q;
+            }
+
+            return best;
+        }
+
+        private int GetMaxQualityFromComponent(MonoBehaviour mb)
+        {
+            if (mb == null) return 0;
+
+            int best = 0;
+            Type t = mb.GetType();
+            BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+            // 필드에서 Item / Item[] / List<Item> 전부 스캔
+            FieldInfo[] fields = t.GetFields(flags);
+            for (int i = 0; i < fields.Length; i++)
+            {
+                FieldInfo f = fields[i];
+                Type ft = f.FieldType;
+
+                try
+                {
+                    // 1) 단일 Item
+                    if (ft == typeof(Item))
+                    {
+                        object obj = f.GetValue(mb);
+                        Item item = obj as Item;
+                        if (item != null)
+                        {
+                            int tier = GetLootTierIndex(item);
+                            if (tier > best) best = tier;
+                        }
+                        continue;
+                    }
+
+                    // 2) Item 배열
+                    if (ft.IsArray && ft.GetElementType() == typeof(Item))
+                    {
+                        object arrObj = f.GetValue(mb);
+                        Array arr = arrObj as Array;
+                        if (arr == null) continue;
+
+                        foreach (object o in arr)
+                        {
+                            Item item = o as Item;
+                            if (item == null) continue;
+                            int tier = GetLootTierIndex(item);
+                            if (tier > best) best = tier;
+                        }
+                        continue;
+                    }
+
+                    // 3) List<Item> 같은 컬렉션
+                    if (typeof(IList).IsAssignableFrom(ft))
+                    {
+                        object listObj = f.GetValue(mb);
+                        IList list = listObj as IList;
+                        if (list == null || list.Count == 0) continue;
+
+                        for (int idx = 0; idx < list.Count; idx++)
+                        {
+                            object elem = list[idx];
+                            Item item = elem as Item;
+                            if (item == null) continue;
+                            int tier = GetLootTierIndex(item);
+                            if (tier > best) best = tier;
+                        }
+                        continue;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.Log("[EnemyRadarHUD] GetMaxQualityFromComponent 필드 예외: " +
+                              t.Name + "." + f.Name + " - " + ex);
+                }
+            }
+
+            return best;
+        }
+
+        // displayQuality → 0~6 등급 인덱스
+        private int GetLootTierIndex(Item item)
+        {
+            if (item == null) return 0;
+
+            int displayQuality = 0;
+
+            try
+            {
+                Type t = item.GetType();
+                BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+                // 1) displayQuality 필드
+                FieldInfo fDisplay = t.GetField("displayQuality", flags);
+                if (fDisplay != null)
+                {
+                    object raw = fDisplay.GetValue(item);
+                    if (raw != null)
+                        displayQuality = Convert.ToInt32(raw);
+                }
+
+                // 2) displayQuality / DisplayQuality 프로퍼티
+                if (displayQuality == 0)
+                {
+                    PropertyInfo pDisplay = t.GetProperty("displayQuality", flags);
+                    if (pDisplay == null)
+                        pDisplay = t.GetProperty("DisplayQuality", flags);
+
+                    if (pDisplay != null)
+                    {
+                        object raw = pDisplay.GetValue(item, null);
+                        if (raw != null)
+                            displayQuality = Convert.ToInt32(raw);
+                    }
+                }
+
+                // 3) quality 필드 (보조)
+                if (displayQuality == 0)
+                {
+                    FieldInfo fQuality = t.GetField("quality", flags);
+                    if (fQuality != null)
+                    {
+                        object raw = fQuality.GetValue(item);
+                        if (raw != null)
+                            displayQuality = Convert.ToInt32(raw);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.Log("[EnemyRadarHUD] GetLootTierIndex 예외: " + ex);
+            }
+
+            
+            if (displayQuality < 0)
+                displayQuality = 0;
+
+            // Duckov 쪽이 0~9 품질을 쓰는 걸 가정:
+            // - 9 이상  : 노랑(전설)  → 5번 (노랑)
+            // - 7~8     : 빨강        → 6번 (빨강)
+            // - 0~6     : 그대로 사용
+            if (displayQuality >= 9)
+                displayQuality = 5;
+            else if (displayQuality > 6)
+                displayQuality = 6;
+
+            // 0 = 흰, 1=초록, 2=파랑, 3=보라, 4=금, 5=노랑, 6=빨강
+            return displayQuality;
+        }
+
+// loot 품질 숫자 -> 점/빔 색
+// 2=초록, 3=파랑, 4=보라, 5=노랑(금), 6=빨강
+private static Color GetLootColorByTier(int tier)
+{
+    // 0~1 이하는 "등급 없음"으로 회색 처리
+    if (tier <= 1)
+        return new Color(0.5f, 0.5f, 0.5f, 0.9f);
+
+    switch (tier)
+    {
+        case 2: // 초록
+            return new Color(0.30f, 1.00f, 0.30f, 0.95f);
+
+        case 3: // 파랑
+            return new Color(0.30f, 0.60f, 1.00f, 0.95f);
+
+        case 4: // 보라
+            return new Color(0.75f, 0.30f, 1.00f, 0.95f);
+
+        case 5: // 노랑(금색)
+            return new Color(1.00f, 0.98f, 0.40f, 0.95f);
+
+        case 6: // 빨강
+            return new Color(1.00f, 0.15f, 0.15f, 0.95f);
+
+        default: // 그 이상은 더 진한 빨강
+            return new Color(0.90f, 0.05f, 0.05f, 0.95f);
+    }
+}
+
+// 디버그용 텍스트(로그 tier 이름)
+private static string GetLootTierName(int tier)
+{
+    if (tier <= 1) return "등급없음";
+
+    switch (tier)
+    {
+        case 2: return "초록(2)";
+        case 3: return "파랑(3)";
+        case 4: return "보라(4)";
+        case 5: return "노랑(5)";
+        case 6: return "빨강(6)";
+        default: return "빨강(7+)";
+    }
+}
+
+
+
         // ================== 텍스처 / 스타일 빌드 ==================
 
-        private void BuildTextures()
+        
+        // ───── 전리품 빔 관리 ─────
+        private void ClearAllLootBeams()
+        {
+            for (int i = 0; i < _lootBeams.Count; i++)
+            {
+                GameObject go = _lootBeams[i];
+                if (go != null)
+                {
+                    UnityEngine.Object.Destroy(go);
+                }
+            }
+            _lootBeams.Clear();
+        }
+
+        private void CreateLootBeamForSpot(LootSpot spot)
+        {
+            if (spot == null || spot.Tr == null)
+                return;
+            if (_lootBeamMaterial == null)
+                return;
+
+            // 너무 낮은 등급(흰/초록/파랑)은 빔 생략
+            if (spot.Tier <= 2)
+                return;
+
+            GameObject beam = new GameObject("EnemyLootBeam");
+            if (_lootBeamRoot != null)
+            {
+                beam.transform.SetParent(_lootBeamRoot.transform, false);
+            }
+
+            Vector3 basePos = spot.Tr.position;
+            basePos.y += _lootBeamOffsetY;
+            Vector3 topPos = basePos + Vector3.up * _lootBeamHeight;
+
+            LineRenderer lr = beam.AddComponent<LineRenderer>();
+            lr.useWorldSpace = true;
+            lr.positionCount = 2;
+            lr.SetPosition(0, basePos);
+            lr.SetPosition(1, topPos);
+
+            lr.startWidth = _lootBeamWidth;
+            lr.endWidth   = _lootBeamWidth;
+
+            lr.material = _lootBeamMaterial;
+
+            Color c = GetLootColorByTier(spot.Tier);
+            c.a = 0.8f;
+            lr.startColor = c;
+            lr.endColor   = c;
+
+            _lootBeams.Add(beam);
+        }
+
+        private void OnDestroy()
+        {
+            ClearAllLootBeams();
+        }
+
+
+private void BuildTextures()
         {
             int size = 256;
 
@@ -621,14 +1082,17 @@ namespace enemyradar
                 40f,
                 red);
 
-            // 4번 링: 바깥 점선 아크 (조금 더 짧게: halfAngle 45)
+            // 4번 링: 바깥 점선 아크
             _ring4Texture = BuildSegmentedArcTexture(
                 size,
                 0.80f, 0.88f,
-                45f,      // <- 80 → 60 → 45로 줄인 값 (조금 더 짧게)
+                45f,
                 9,
                 0.65f,
                 red);
+
+            // 전리품 점용 동그라미 텍스처 (흰색, 색은 GUI.color 로 입힘)
+            _lootDotTexture = BuildDotTexture(32);
 
             _texReady = true;
         }
@@ -852,6 +1316,38 @@ namespace enemyradar
 
                     if (inSeg <= fillRatio)
                         tex.SetPixel(x, y, color);
+                    else
+                        tex.SetPixel(x, y, new Color(0f, 0f, 0f, 0f));
+                }
+            }
+
+            tex.Apply();
+            return tex;
+        }
+
+        // 전리품 점용 동그라미 텍스처 (흰색)
+        private Texture2D BuildDotTexture(int size)
+        {
+            Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+            tex.wrapMode = TextureWrapMode.Clamp;
+
+            float cx = (size - 1) * 0.5f;
+            float cy = (size - 1) * 0.5f;
+            float r  = size * 0.45f;
+            float rSq = r * r;
+
+            Color cInner = Color.white;
+
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float dx = x - cx;
+                    float dy = y - cy;
+                    float distSq = dx * dx + dy * dy;
+
+                    if (distSq <= rSq)
+                        tex.SetPixel(x, y, cInner);
                     else
                         tex.SetPixel(x, y, new Color(0f, 0f, 0f, 0f));
                 }
