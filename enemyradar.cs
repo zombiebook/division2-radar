@@ -50,7 +50,7 @@ namespace enemyradar
         private float _nextLootScanTime;
 
         private const float EnemyScanInterval = 3f;   // 적 레이더는 3초마다
-        private const float LootScanInterval  = 0.5f; // 전리품 빔은 0.5초마다
+        private const float LootScanInterval  = 1.5f; // 전리품 빔은 1.5초마다
 
         private bool _hasTarget;
         private Transform _nearestEnemy;
@@ -1070,6 +1070,10 @@ namespace enemyradar
 
                 _enemyLootSpots.Add(spot);
                 lootCount++;
+
+                // 🔽 추가
+                if (lootCount >= 40)
+                    break;
 
                 CreateLootBeamForSpot(spot);
 
