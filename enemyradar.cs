@@ -126,7 +126,16 @@ namespace enemyradar
         private float _lootBeamHeight  = 6f;    // 빔 높이
         private float _lootBeamWidth   = 0.25f; // 굵기
         private float _lootBeamOffsetY = 0.2f;  // 가방 위로 살짝 띄우기
-
+        
+        private static readonly string[] _lootContainerKeywords = new string[]
+        {
+    "lootbox_enemydie",
+    "lootbox_natural",
+    "container",
+    "chest",
+    "box",
+    "drawer"
+        };
 
 
         private void Start()
@@ -1030,8 +1039,25 @@ namespace enemyradar
                 string lowerName = name.ToLower();
 
                 // ★ 적이 죽어서 떨어지는 전리품 가방만: LootBox_EnemyDie_Template(Clone)
-                if (!lowerName.Contains("lootbox_enemydie_template"))
+                string Name = go.name;
+                string LowerName = string.IsNullOrEmpty(name) ? string.Empty : name.ToLowerInvariant();
+
+                // 리롤 모드와 같은 컨테이너 키워드 기준으로 필터
+                bool nameMatch = false;
+                for (int k = 0; k < _lootContainerKeywords.Length; k++)
+                {
+                    string kw = _lootContainerKeywords[k];
+                    if (!string.IsNullOrEmpty(kw) && lowerName.Contains(kw))
+                    {
+                        nameMatch = true;
+                        break;
+                    }
+                }
+
+                // 키워드 아무 것도 안 맞으면 이 오브젝트는 루팅 컨테이너가 아님
+                if (!nameMatch)
                     continue;
+
 
                 Transform tr = go.transform;
                 if (tr == null) continue;
