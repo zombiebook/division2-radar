@@ -31,19 +31,28 @@ namespace enemyradar
 
     internal class EnemyRadarHUD : MonoBehaviour
     {
+        // ===== HP 경고 언어 설정 =====
+        private enum HpWarnLang
+        {
+            Auto = 0,
+            Korean = 1,
+            Japanese = 2,
+            English = 3
+        }
+
+        private HpWarnLang _hpWarnLangMode = HpWarnLang.Auto;
         // ===== 플레이어 / 적 추적 =====
-                private Transform _player;
+        private Transform _player;
         private readonly List<Transform> _enemies = new List<Transform>();
 
-        // 적 / 전리품 스캔 타이머를 분리
+        // 적 / 전리품 스캔 타이머 분리
         private float _nextEnemyScanTime;
         private float _nextLootScanTime;
 
-        private const float EnemyScanInterval = 3f;   // 적 레이더: 3초마다
-        private const float LootScanInterval  = 0.5f; // 전리품 빔: 0.5초마다
+        private const float EnemyScanInterval = 3f;   // 적 레이더는 3초마다
+        private const float LootScanInterval  = 0.5f; // 전리품 빔은 0.5초마다
 
         private bool _hasTarget;
-
         private Transform _nearestEnemy;
         private float _nearestDist;
         private float _normalizedDist;
@@ -70,6 +79,17 @@ namespace enemyradar
         // ===== 디버그 텍스트 스타일 =====
         private GUIStyle _labelStyle;
         private bool _styleReady;
+
+        // ===== 플레이어 HP 경고 =====
+        private MonoBehaviour _playerHealthMb;
+        private FieldInfo _playerCurHpField;
+        private FieldInfo _playerMaxHpField;
+        private PropertyInfo _playerMaxHpProp;
+        private float _playerHpRatio = 1f;
+        private float _playerHpMaxObserved = 1f;
+        private bool _hasHpRatio;
+        private float _lowHpThreshold = 0.3f;
+        private GUIStyle _lowHpStyle;
 
         // ===== team 필드 캐시 =====
         private readonly Dictionary<Type, FieldInfo> _teamFieldCache = new Dictionary<Type, FieldInfo>();
@@ -135,7 +155,7 @@ namespace enemyradar
             }
         }
 
-               private void Update()
+        private void Update()
         {
             float now = Time.time;
 
@@ -153,11 +173,30 @@ namespace enemyradar
                 ScanLootWorld();
             }
 
-            // 가장 가까운 적은 매 프레임 갱신
+            // 가장 가까운 적 갱신
+                        // 가장 가까운 적 갱신
             UpdateNearestEnemy();
+
+            // ───── F7: HP 경고 언어 토글 ─────
+            if (Input.GetKeyDown(KeyCode.F7))
+            {
+                int next = ((int)_hpWarnLangMode + 1) % 4;
+                _hpWarnLangMode = (HpWarnLang)next;
+
+                string label;
+                switch (_hpWarnLangMode)
+                {
+                    case HpWarnLang.Korean:   label = "Korean";   break;
+                    case HpWarnLang.Japanese: label = "Japanese"; break;
+                    case HpWarnLang.English:  label = "English";  break;
+                    default:                  label = "Auto";     break;
+                }
+            }
+
+
+            // 플레이어 HP 비율 갱신
+            UpdatePlayerHealthRatio();
         }
-
-
 
         private void OnGUI()
         {
@@ -367,29 +406,38 @@ namespace enemyradar
                 }
             }
 
-            // 4) 디버그 텍스트 (레이더 왼쪽)
-            Rect textRect = new Rect(radarRect.x - 220f, radarRect.y, 210f, radarRect.height);
-
-            if (_hasTarget && _nearestEnemy != null)
+            // 5) 플레이어 HP 낮을 때 하단 경고
+            // 5) 플레이어 HP 낮을 때 하단 경고
+            // 5) 플레이어 HP 낮을 때 하단 경고
+            // 5) 플레이어 HP 낮을 때 하단 경고
+            if (_hasHpRatio &&
+                _playerHpMaxObserved > 0.01f &&
+                _playerHpRatio > 0f &&
+                _playerHpRatio <= _lowHpThreshold &&
+                _lowHpStyle != null)
             {
-                string ringText = "4번(멀다)";
-                float d = _nearestDist;
-                if (d <= _ring2DistanceMax) ringText = "2번(가까움)";
-                else if (d <= _ring3DistanceMax) ringText = "3번(중간)";
+                float boxWidth = 520f;
+                float boxHeight = 60f;
+                float boxX = (Screen.width - boxWidth) * 0.5f;
+                float boxY = Screen.height - boxHeight - 180f;
 
-                string info =
-                    "타깃: " + SafeGetName(_nearestEnemy) + "\n" +
-                    "적 수: " + _enemies.Count + "\n" +
-                    "거리: " + _nearestDist.ToString("F1") + "m\n" +
-                    "링: " + ringText;
+                Rect bgRect = new Rect(boxX, boxY, boxWidth, boxHeight);
 
-                GUI.Label(textRect, info, _labelStyle);
+                Color PrevColor = GUI.color;
+
+                GUI.color = new Color(0f, 0f, 0f, 0.7f);
+                GUI.Box(bgRect, GUIContent.none);
+
+                GUI.color = Color.white;
+                GUI.Label(bgRect, GetLowHpWarningText(), _lowHpStyle); // ← 여기!
+
+                GUI.color = PrevColor;
             }
-            else
-            {
-                GUI.Label(textRect, "타깃 없음\n적 수: " + _enemies.Count, _labelStyle);
-            }
+
+
+
         }
+
 
         // ================== 캐릭터 스캔 ==================
 
@@ -644,6 +692,10 @@ namespace enemyradar
 
             _player = playerInfo != null ? playerInfo.Tr : null;
 
+            // 플레이어 HP 컴포넌트 바인딩 (한 번만 설정)
+            if (_playerHealthMb == null)
+                SetupPlayerHealthAccessor(_player);
+
             // ───── 적 리스트 = "적 팀" + 플레이어 제외 ─────
             foreach (CharacterInfo info in chars)
             {
@@ -731,7 +783,227 @@ namespace enemyradar
             return string.IsNullOrEmpty(n) ? "(noname)" : n;
         }
 
-        // ================== 전리품 스캔 ==================
+        
+        // ==================
+        // ================== 플레이어 HP 접근 ==================
+
+        private void SetupPlayerHealthAccessor(Transform playerTr)
+        {
+            _playerHealthMb = null;
+            _playerCurHpField = null;
+            _playerMaxHpField = null;
+            _playerMaxHpProp = null;
+            _hasHpRatio = false;
+            _playerHpRatio = 1f;
+            _playerHpMaxObserved = 1f;
+
+            if (playerTr == null)
+            {
+                Debug.Log("[EnemyRadarHUD] SetupPlayerHealthAccessor - playerTr가 null");
+                return;
+            }
+
+            try
+            {
+                // 씬 전체에서 Health 타입 후보 찾기
+                MonoBehaviour[] all = UnityEngine.Object.FindObjectsOfType<MonoBehaviour>();
+                if (all == null || all.Length == 0)
+                {
+                    Debug.Log("[EnemyRadarHUD] SetupPlayerHealthAccessor - MonoBehaviour가 없음");
+                    return;
+                }
+
+                MonoBehaviour bestMb = null;
+                float bestDist = float.MaxValue;
+                BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+                for (int i = 0; i < all.Length; i++)
+                {
+                    MonoBehaviour mb = all[i];
+                    if (mb == null) continue;
+
+                    Type t = mb.GetType();
+                    string typeName = t.Name != null ? t.Name.ToLower() : "";
+                    if (!typeName.Contains("health"))
+                        continue;
+
+                    // team 필드에서 player 여부 판정 (있다면)
+                    FieldInfo tf = GetTeamField(t);
+                    bool isPlayerHealth = false;
+                    if (tf != null)
+                    {
+                        string teamStr = GetTeamStringFromField(mb, tf);
+                        string lowerTeam = string.IsNullOrEmpty(teamStr) ? "" : teamStr.ToLower();
+                        if (lowerTeam.Contains("player"))
+                            isPlayerHealth = true;
+                    }
+
+                    if (!isPlayerHealth)
+                        continue;
+
+                    float d = Vector3.Distance(playerTr.position, mb.transform.position);
+                    if (d < bestDist)
+                    {
+                        bestDist = d;
+                        bestMb = mb;
+                    }
+                }
+
+                if (bestMb == null)
+                {
+                    Debug.Log("[EnemyRadarHUD] SetupPlayerHealthAccessor - player Health 후보를 찾지 못함");
+                    return;
+                }
+
+                Type ht = bestMb.GetType();
+                string typeNameFull = ht.FullName ?? ht.Name;
+
+                // 1차: 필드에서 hp/health/life 이름 가진 숫자형 찾기 (스코어 기반)
+                FieldInfo bestHpField = null;
+                int bestScore = int.MinValue;
+                FieldInfo[] fields = ht.GetFields(flags);
+                for (int i = 0; i < fields.Length; i++)
+                {
+                    FieldInfo f = fields[i];
+                    Type ft = f.FieldType;
+
+                    if (!(ft == typeof(int) || ft == typeof(float) || ft == typeof(double) ||
+                          ft == typeof(long) || ft == typeof(short)))
+                        continue;
+
+                    string fname = f.Name != null ? f.Name.ToLower() : "";
+                    if (!(fname.Contains("hp") || fname.Contains("health") || fname.Contains("life")))
+                        continue;
+
+                    int score = 0;
+                    if (fname == "hp" || fname == "health") score += 30;
+                    if (fname.Contains("cur") || fname.Contains("current") || fname.Contains("now")) score += 50;
+                    if (fname.Contains("max")) score -= 40;
+                    if (fname.Contains("hash") || fname.Contains("id") || fname.Contains("index")) score -= 60;
+
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        bestHpField = f;
+                    }
+                }
+
+                // 2차: 필드는 못 찾았는데 프로퍼티에서는 있는지
+                if (bestHpField == null)
+                {
+                    PropertyInfo[] props = ht.GetProperties(flags);
+                    for (int i = 0; i < props.Length; i++)
+                    {
+                        PropertyInfo p = props[i];
+                        Type pt = p.PropertyType;
+                        if (!(pt == typeof(int) || pt == typeof(float) || pt == typeof(double) ||
+                              pt == typeof(long) || pt == typeof(short)))
+                            continue;
+
+                        string pname = p.Name != null ? p.Name.ToLower() : "";
+                        if (pname.Contains("hp") || pname.Contains("health") || pname.Contains("life"))
+                        {
+                            _playerHealthMb = bestMb;
+                            _playerCurHpField = null;
+                            _playerMaxHpField = null;
+                            _playerMaxHpProp = p;
+                            _playerHpMaxObserved = 1f;
+
+                            Debug.Log("[EnemyRadarHUD] 플레이어 Health 바인딩(프로퍼티): " + typeNameFull +
+                                      " (prop=" + p.Name + ")");
+                            return;
+                        }
+                    }
+                }
+
+                if (bestHpField != null)
+                {
+                    _playerHealthMb = bestMb;
+                    _playerCurHpField = bestHpField;
+                    _playerMaxHpField = null;
+                    _playerMaxHpProp = null;
+                    _playerHpMaxObserved = 1f;
+
+                    Debug.Log("[EnemyRadarHUD] 플레이어 Health 바인딩(필드): " + typeNameFull +
+                              " (field=" + bestHpField.Name + ")");
+                    return;
+                }
+
+                Debug.Log("[EnemyRadarHUD] SetupPlayerHealthAccessor - hp/health 숫자 필드를 찾지 못함. type=" + typeNameFull);
+            }
+            catch (Exception ex)
+            {
+                Debug.Log("[EnemyRadarHUD] SetupPlayerHealthAccessor 예외: " + ex);
+                _playerHealthMb = null;
+                _playerCurHpField = null;
+                _playerMaxHpField = null;
+                _playerMaxHpProp = null;
+            }
+        }
+
+        private void UpdatePlayerHealthRatio()
+        {
+            _hasHpRatio = false;
+            _playerHpRatio = 1f;
+
+            if (_playerHealthMb == null)
+                return;
+
+            try
+            {
+                float cur = 0f;
+                bool ok = false;
+
+                if (_playerCurHpField != null)
+                {
+                    object curObj = _playerCurHpField.GetValue(_playerHealthMb);
+                    if (curObj != null)
+                    {
+                        cur = Convert.ToSingle(curObj);
+                        ok = true;
+                    }
+                }
+                else if (_playerMaxHpProp != null)
+                {
+                    object curObj = _playerMaxHpProp.GetValue(_playerHealthMb, null);
+                    if (curObj != null)
+                    {
+                        cur = Convert.ToSingle(curObj);
+                        ok = true;
+                    }
+                }
+
+                if (!ok)
+                    return;
+
+                if (cur <= 0f)
+                {
+                    _playerHpRatio = 0f;
+                    _hasHpRatio = true;
+                    return;
+                }
+
+                // 처음엔 현재 값을 최대값으로 간주하고, 이후 더 큰 값 나오면 갱신
+                if (_playerHpMaxObserved < 0.01f || cur > _playerHpMaxObserved)
+                    _playerHpMaxObserved = cur;
+
+                if (_playerHpMaxObserved <= 0.01f)
+                    return;
+
+                _playerHpRatio = Mathf.Clamp01(cur / _playerHpMaxObserved);
+                _hasHpRatio = true;
+            }
+            catch (Exception ex)
+            {
+                Debug.Log("[EnemyRadarHUD] UpdatePlayerHealthRatio 예외: " + ex);
+                _playerHealthMb = null;
+                _playerCurHpField = null;
+                _playerMaxHpField = null;
+                _playerMaxHpProp = null;
+            }
+        }
+
+// ================== 전리품 스캔 ==================
 
         private void ScanLootWorld()
         {
@@ -950,8 +1222,9 @@ namespace enemyradar
             return displayQuality;
         }
 
-// loot 품질 숫자 -> 점/빔 색
-// 2=초록, 3=파랑, 4=보라, 5=노랑(금), 6=빨강
+        // loot 품질 숫자 -> 점 색
+// bestQ(=tier)는 displayQuality 그대로 들어온다고 가정:
+// 2=초록, 3=파랑, 4=보라, 5=금, 6=연빨, 7=진빨
 private static Color GetLootColorByTier(int tier)
 {
     // 0~1 이하는 "등급 없음"으로 회색 처리
@@ -961,26 +1234,26 @@ private static Color GetLootColorByTier(int tier)
     switch (tier)
     {
         case 2: // 초록
-            return new Color(0.30f, 1.00f, 0.30f, 0.95f);
+            return new Color(0.3f, 1f, 0.3f, 0.95f);
 
         case 3: // 파랑
-            return new Color(0.30f, 0.60f, 1.00f, 0.95f);
+            return new Color(0.3f, 0.6f, 1f, 0.95f);
 
         case 4: // 보라
-            return new Color(0.75f, 0.30f, 1.00f, 0.95f);
+            return new Color(0.75f, 0.3f, 1f, 0.95f);
 
-        case 5: // 노랑(금색)
-            return new Color(1.00f, 0.98f, 0.40f, 0.95f);
+        case 5: // 금색
+            return new Color(1f, 0.9f, 0.3f, 0.95f);
 
-        case 6: // 빨강
-            return new Color(1.00f, 0.15f, 0.15f, 0.95f);
+        case 6: // 연한 빨강
+            return new Color(1f, 0.5f, 0.5f, 0.95f);
 
-        default: // 그 이상은 더 진한 빨강
-            return new Color(0.90f, 0.05f, 0.05f, 0.95f);
+        default: // 7 이상 = 진빨
+            return new Color(1f, 0.1f, 0.1f, 0.95f);
     }
 }
 
-// 디버그용 텍스트(로그 tier 이름)
+// 디버그용 텍스트(로그에 tier 이름 찍을 때 사용)
 private static string GetLootTierName(int tier)
 {
     if (tier <= 1) return "등급없음";
@@ -990,17 +1263,36 @@ private static string GetLootTierName(int tier)
         case 2: return "초록(2)";
         case 3: return "파랑(3)";
         case 4: return "보라(4)";
-        case 5: return "노랑(5)";
-        case 6: return "빨강(6)";
-        default: return "빨강(7+)";
+        case 5: return "금색(5)";
+        case 6: return "연빨(6)";
+        default: return "진빨(7+)";
     }
 }
+        // HP 경고 문구 다국어 지원
+        // HP 경고 문구 다국어 + 수동 토글
+        // HP 경고 문구 – 시스템 언어에 따라 자동 선택 (한 줄)
+        private string GetLowHpWarningText()
+        {
+            SystemLanguage lang = Application.systemLanguage;
+
+            // 일본어
+            if (lang == SystemLanguage.Japanese)
+                return "バイタルサインが危険レベルです。";
+
+            // 영어
+            if (lang == SystemLanguage.English)
+                return "Vital signs are at critical levels.";
+
+            // 그 외(기본: 한국어)
+            return "바이털 사인이 위험 수준입니다.";
+        }
+
 
 
 
         // ================== 텍스처 / 스타일 빌드 ==================
 
-        
+
         // ───── 전리품 빔 관리 ─────
         private void ClearAllLootBeams()
         {
@@ -1103,8 +1395,17 @@ private void BuildTextures()
             _labelStyle.fontSize = 18;
             _labelStyle.normal.textColor = Color.white;
             _labelStyle.alignment = TextAnchor.UpperLeft;
+
+            _lowHpStyle = new GUIStyle(GUI.skin.label);
+            _lowHpStyle.fontSize = 18;
+            _lowHpStyle.fontStyle = FontStyle.Bold;
+            _lowHpStyle.alignment = TextAnchor.MiddleCenter;
+            // HP 경고 문구 색 (노란색)
+            _lowHpStyle.normal.textColor = new Color(1f, 0.9f, 0.2f, 1f);
+
             _styleReady = true;
         }
+
 
         private Texture2D BuildRadarBackground(int size)
         {
