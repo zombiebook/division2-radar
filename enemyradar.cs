@@ -1012,9 +1012,9 @@ namespace enemyradar
             }
         }
 
-// ================== 전리품 스캔 ==================
+        // ================== 전리품 스캔 ==================
 
-        private void ScanLootWorld()
+        void ScanLootWorld()
         {
             _enemyLootSpots.Clear();
             ClearAllLootBeams();
@@ -1032,37 +1032,58 @@ namespace enemyradar
             {
                 GameObject go = allGos[i];
                 if (go == null) continue;
+                if (!go.activeInHierarchy) continue;
 
                 string name = go.name;
                 if (string.IsNullOrEmpty(name)) continue;
 
-                string lowerName = name.ToLower();
+                string lowerName = name.ToLowerInvariant();
 
-                // ★ 적이 죽어서 떨어지는 전리품 가방만: LootBox_EnemyDie_Template(Clone)
-                string Name = go.name;
-                string LowerName = string.IsNullOrEmpty(name) ? string.Empty : name.ToLowerInvariant();
-
-                // 리롤 모드와 같은 컨테이너 키워드 기준으로 필터
-                bool nameMatch = false;
-                for (int k = 0; k < _lootContainerKeywords.Length; k++)
+                // ─────────────────────────────
+                // 1) 종이상자 / 카드박스 계열은 전부 제외
+                // ─────────────────────────────
+                if (lowerName.Contains("cardbox") ||
+                    lowerName.Contains("cardboard") ||
+                    lowerName.Contains("paperbox") ||
+                    lowerName.Contains("paper_box"))
                 {
-                    string kw = _lootContainerKeywords[k];
-                    if (!string.IsNullOrEmpty(kw) && lowerName.Contains(kw))
-                    {
-                        nameMatch = true;
-                        break;
-                    }
+                    continue;
                 }
 
-                // 키워드 아무 것도 안 맞으면 이 오브젝트는 루팅 컨테이너가 아님
-                if (!nameMatch)
-                    continue;
+                // ─────────────────────────────
+                // 2) 적 드랍/자연 생성 LootBox만 빔 대상
+                //    예: LootBox_EnemyDie_Template, LootBox_Natural_Template
+                // ─────────────────────────────
+                bool isLootBox = false;
 
+                if (lowerName.Contains("lootbox_enemydie") ||
+                    lowerName.Contains("lootbox_natural") ||
+                    lowerName.Contains("lootbox_"))
+                {
+                    isLootBox = true;
+                }
+
+                if (!isLootBox)
+                    continue;
 
                 Transform tr = go.transform;
                 if (tr == null) continue;
 
+                // 플레이어 계통(플레이어 혹은 그 자식) 오브젝트면 제외
+                if (_player != null)
+                {
+                    if (tr == _player || tr.IsChildOf(_player))
+                        continue;
+                }
+
+                // ─────────────────────────────
+                // 3) 실제로 안에 아이템이 있는지 품질 체크
+                // ─────────────────────────────
                 int bestQ = GetMaxQualityFromGameObject(go);
+
+                // 품질 0이면(아이템 없음) 빔 안 띄움
+                if (bestQ <= 0)
+                    continue;
 
                 LootSpot spot = new LootSpot();
                 spot.Tr = tr;
@@ -1071,19 +1092,20 @@ namespace enemyradar
                 _enemyLootSpots.Add(spot);
                 lootCount++;
 
-                // 🔽 추가
-                if (lootCount >= 40)
-                    break;
-
                 CreateLootBeamForSpot(spot);
 
                 Debug.Log("[EnemyRadarHUD] LootSpot - name=" + name +
                           ", scene=" + go.scene.name +
                           ", bestQ=" + bestQ);
+
+                // 너무 많이 찍히는 것 방지
+                if (lootCount >= 40)
+                    break;
             }
 
             Debug.Log("[EnemyRadarHUD] ScanLootWorld - enemyLoot count=" + lootCount);
         }
+
 
         private int GetMaxQualityFromGameObject(GameObject go)
         {
