@@ -41,6 +41,22 @@ namespace enemyradar
         }
 
         private HpWarnLang _hpWarnLangMode = HpWarnLang.Auto;
+
+        // ===== 레이더 표시 / 위치·크기 설정 =====
+        private bool _radarVisible = true; // F6 토글
+
+        private bool _showRadarSettings = false;                        // F8 토글
+        private Rect _settingsWindowRect = new Rect(80f, 80f, 260f, 200f);
+
+        // 오른쪽 아래 기본 위치(200px)에서의 배율/오프셋
+        private float _radarScale = 1.0f;  // 1.0 → size=200 그 상태 그대로
+        private float _radarOffsetX = 0f;    // +면 오른쪽, -면 왼쪽
+        private float _radarOffsetY = 0f;    // +면 아래,   -면 위
+
+        // ───── 레이더 설정 저장용 ─────
+        private const string RadarConfigFileName = "EnemyRadarHUD_RadarConfig_v1.txt";
+        private bool _radarConfigLoaded = false;
+
         // ===== 플레이어 / 적 추적 =====
         private Transform _player;
         private readonly List<Transform> _enemies = new List<Transform>();
@@ -50,7 +66,7 @@ namespace enemyradar
         private float _nextLootScanTime;
 
         private const float EnemyScanInterval = 3f;   // 적 레이더는 3초마다
-        private const float LootScanInterval  = 4.0f; // 전리품 빔은 1.5초마다
+        private const float LootScanInterval = 4.0f; // 전리품 빔은 4초마다
 
         private bool _hasTarget;
         private Transform _nearestEnemy;
@@ -80,7 +96,6 @@ namespace enemyradar
         private GUIStyle _labelStyle;
         private bool _styleReady;
 
-        // EnemyRadarHUD 클래스 필드들 사이 어딘가에 추가
         private const bool DEBUG_LOOT_SCAN = false;
 
         // ===== 플레이어 HP 경고 =====
@@ -126,23 +141,23 @@ namespace enemyradar
         private readonly List<GameObject> _lootBeams = new List<GameObject>();
 
         // 빔 모양 설정값
-        private float _lootBeamHeight  = 6f;    // 빔 높이
-        private float _lootBeamWidth   = 0.25f; // 굵기
-        private float _lootBeamOffsetY = 0.2f;  // 가방 위로 살짝 띄우기
-        
+        private float _lootBeamHeight = 6f;
+        private float _lootBeamWidth = 0.25f;
+        private float _lootBeamOffsetY = 0.2f;
+
         private static readonly string[] _lootContainerKeywords = new string[]
         {
-    "lootbox_enemydie",
-    "lootbox_natural",
-    "container",
-    "chest",
-    "box",
-    "drawer"
+            "lootbox_enemydie",
+            "lootbox_natural",
+            "container",
+            "chest",
+            "box",
+            "drawer"
         };
-
 
         private void Start()
         {
+            LoadRadarConfig();   // ← 추가
             Debug.Log("[EnemyRadarHUD] Start - 준비 완료");
 
             // 전리품 빔 루트 오브젝트
@@ -152,7 +167,7 @@ namespace enemyradar
                 UnityEngine.Object.DontDestroyOnLoad(_lootBeamRoot);
             }
 
-            // 빔용 머티리얼 (Unlit/Color 우선, 없으면 Sprites/Default)
+            // 빔용 머티리얼
             if (_lootBeamMaterial == null)
             {
                 Shader shader = Shader.Find("Unlit/Color");
@@ -162,14 +177,107 @@ namespace enemyradar
                 if (shader != null)
                 {
                     _lootBeamMaterial = new Material(shader);
-                    _lootBeamMaterial.renderQueue = 3000; // 투명 계열
+                    _lootBeamMaterial.renderQueue = 3000;
                 }
+            }
+        }
+
+        private void LoadRadarConfig()
+        {
+            if (_radarConfigLoaded)
+                return;
+
+            _radarConfigLoaded = true;
+
+            try
+            {
+                string dir = Application.persistentDataPath;
+                string path = System.IO.Path.Combine(dir, RadarConfigFileName);
+
+                if (!System.IO.File.Exists(path))
+                    return;
+
+                string text = System.IO.File.ReadAllText(path);
+                if (string.IsNullOrEmpty(text))
+                    return;
+
+                string[] parts = text.Split(';');
+                if (parts.Length < 3)
+                    return;
+
+                float s, ox, oy;
+
+                if (float.TryParse(
+                        parts[0],
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out s))
+                {
+                    _radarScale = Mathf.Clamp(s, 0.6f, 1.6f);
+                }
+
+                if (float.TryParse(
+                        parts[1],
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out ox))
+                {
+                    _radarOffsetX = Mathf.Clamp(ox, -200f, 200f);
+                }
+
+                if (float.TryParse(
+                        parts[2],
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out oy))
+                {
+                    _radarOffsetY = Mathf.Clamp(oy, -200f, 200f);
+                }
+
+                Debug.Log("[EnemyRadarHUD] LoadRadarConfig - scale="
+                          + _radarScale + ", offX=" + _radarOffsetX + ", offY=" + _radarOffsetY);
+            }
+            catch (Exception ex)
+            {
+                Debug.Log("[EnemyRadarHUD] LoadRadarConfig 예외: " + ex);
+            }
+        }
+
+        private void SaveRadarConfig()
+        {
+            try
+            {
+                string dir = Application.persistentDataPath;
+                string path = System.IO.Path.Combine(dir, RadarConfigFileName);
+
+                string text =
+                    _radarScale.ToString(System.Globalization.CultureInfo.InvariantCulture) + ";" +
+                    _radarOffsetX.ToString(System.Globalization.CultureInfo.InvariantCulture) + ";" +
+                    _radarOffsetY.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+                System.IO.File.WriteAllText(path, text);
+            }
+            catch (Exception ex)
+            {
+                Debug.Log("[EnemyRadarHUD] SaveRadarConfig 예외: " + ex);
             }
         }
 
         private void Update()
         {
             float now = Time.time;
+
+            // F6: 레이더 온/오프
+            if (Input.GetKeyDown(KeyCode.F6))
+            {
+                _radarVisible = !_radarVisible;
+            }
+
+            // F8: 설정 창 열기/닫기
+            if (Input.GetKeyDown(KeyCode.F8))
+            {
+                _showRadarSettings = !_showRadarSettings;
+            }
 
             // 적 / 플레이어 스캔 (3초마다)
             if (now >= _nextEnemyScanTime)
@@ -178,7 +286,7 @@ namespace enemyradar
                 ScanCharacters();
             }
 
-            // 전리품 가방 + 빔 스캔 (0.5초마다)
+            // 전리품 가방 + 빔 스캔 (4초마다)
             if (now >= _nextLootScanTime)
             {
                 _nextLootScanTime = now + LootScanInterval;
@@ -186,25 +294,14 @@ namespace enemyradar
             }
 
             // 가장 가까운 적 갱신
-                        // 가장 가까운 적 갱신
             UpdateNearestEnemy();
 
-            // ───── F7: HP 경고 언어 토글 ─────
+            // F7: HP 경고 언어 토글 (현재는 시스템 언어 자동 사용)
             if (Input.GetKeyDown(KeyCode.F7))
             {
                 int next = ((int)_hpWarnLangMode + 1) % 4;
                 _hpWarnLangMode = (HpWarnLang)next;
-
-                string label;
-                switch (_hpWarnLangMode)
-                {
-                    case HpWarnLang.Korean:   label = "Korean";   break;
-                    case HpWarnLang.Japanese: label = "Japanese"; break;
-                    case HpWarnLang.English:  label = "English";  break;
-                    default:                  label = "Auto";     break;
-                }
             }
-
 
             // 플레이어 HP 비율 갱신
             UpdatePlayerHealthRatio();
@@ -219,12 +316,27 @@ namespace enemyradar
             if (_radarTexture == null)
                 return;
 
-            float size   = 200f;
+            // 설정 창
+            if (_showRadarSettings)
+            {
+                DrawRadarSettingsWindow();
+            }
+
+            if (!_radarVisible)
+                return;
+
+            // 기본 크기/위치 (예전 코드와 완전히 동일한 기준)
+            float baseSize = 200f;
             float margin = 20f;
 
-            // ↓ 레이더 위치: 오른쪽 아래 (살짝 위로)
-            float radarX = Screen.width  - size - margin;
-            float radarY = Screen.height - size - margin - 80f;
+            float baseX = Screen.width - baseSize - margin;
+            float baseY = Screen.height - baseSize - margin - 80f;
+
+            // 배율/오프셋 적용
+            float clampedScale = Mathf.Clamp(_radarScale, 0.5f, 2.0f);
+            float size = baseSize * clampedScale;
+            float radarX = baseX + _radarOffsetX;
+            float radarY = baseY + _radarOffsetY;
 
             Rect radarRect = new Rect(radarX, radarY, size, size);
 
@@ -259,12 +371,12 @@ namespace enemyradar
                 fwdAngle = Mathf.Atan2(fwd.x, fwd.z) * Mathf.Rad2Deg;
             }
 
-            // 2) 링 표시 (다수 적 지원) - ★ 백업본 구조 그대로 ★
+            // 2) 링 표시 (다수 적 지원)
             if (hasPlayer && _enemies.Count > 0)
             {
                 float pulse = 0.5f + 0.5f * Mathf.Sin(Time.time * 4f);
                 float alpha = Mathf.Lerp(0.5f, 1.0f, pulse);
-                GUI.color   = new Color(1f, 1f, 1f, alpha);
+                GUI.color = new Color(1f, 1f, 1f, alpha);
 
                 bool hasRing2 = false;
                 _midAngles.Clear();
@@ -295,7 +407,7 @@ namespace enemyradar
                         toEnemy.Normalize();
 
                         float enAngle = Mathf.Atan2(toEnemy.x, toEnemy.z) * Mathf.Rad2Deg;
-                        float rel = Mathf.DeltaAngle(fwdAngle, enAngle); // -180~180, 앞이 0
+                        float rel = Mathf.DeltaAngle(fwdAngle, enAngle);
                         _midAngles.Add(rel);
                     }
                     else if (distance <= _ring4DistanceMax)
@@ -359,11 +471,7 @@ namespace enemyradar
                 GUI.color = prevColor;
             }
 
-            // ─────────────────────────────────────
             // 3) 전리품 점(가방) 찍기
-            //    - 적이 죽어서 떨어진 LootBox_EnemyDie_Template 만 사용
-            //    - 상자 안의 "가장 높은 displayQuality" 로 색 결정
-            // ─────────────────────────────────────
             if (hasPlayer && _enemyLootSpots.Count > 0 && _lootDotTexture != null)
             {
                 float centerX = radarRect.x + radarRect.width * 0.5f;
@@ -376,7 +484,6 @@ namespace enemyradar
                         continue;
 
                     int tier = spot.Tier;
-                    // 등급 0 (흰색) 은 너무 지저분해질 수 있으니, 1 이상만 점 찍기
                     if (tier <= 2)
                         continue;
 
@@ -388,18 +495,14 @@ namespace enemyradar
                     if (dist > _maxRadarDistance * 1.2f)
                         continue;
 
-                    // 플레이어 전방 기준 각도
                     toLoot.Normalize();
                     float lootAngle = Mathf.Atan2(toLoot.x, toLoot.z) * Mathf.Rad2Deg;
                     float relAngle = Mathf.DeltaAngle(fwdAngle, lootAngle);
 
-                    // 거리 → 반지름 (레이더 안쪽~바깥쪽까지)
                     float t = Mathf.Clamp01(dist / _maxRadarDistance);
-                    // 0.25 ~ 0.9 사이에서 움직이게 (너무 가운데/테두리에 안붙게)
                     float radiusNorm = 0.25f + 0.65f * t;
                     float radarRadius = (radarRect.width * 0.5f) * radiusNorm;
 
-                    // 각도 → 화면 좌표 (앞: 위쪽)
                     float rad = (90f - relAngle) * Mathf.Deg2Rad;
                     float px = centerX + Mathf.Cos(rad) * radarRadius;
                     float py = centerY - Mathf.Sin(rad) * radarRadius;
@@ -419,9 +522,6 @@ namespace enemyradar
             }
 
             // 5) 플레이어 HP 낮을 때 하단 경고
-            // 5) 플레이어 HP 낮을 때 하단 경고
-            // 5) 플레이어 HP 낮을 때 하단 경고
-            // 5) 플레이어 HP 낮을 때 하단 경고
             if (_hasHpRatio &&
                 _playerHpMaxObserved > 0.01f &&
                 _playerHpRatio > 0f &&
@@ -435,24 +535,66 @@ namespace enemyradar
 
                 Rect bgRect = new Rect(boxX, boxY, boxWidth, boxHeight);
 
-                Color PrevColor = GUI.color;
+                Color prev = GUI.color;
 
                 GUI.color = new Color(0f, 0f, 0f, 0.7f);
                 GUI.Box(bgRect, GUIContent.none);
 
                 GUI.color = Color.white;
-                GUI.Label(bgRect, GetLowHpWarningText(), _lowHpStyle); // ← 여기!
+                GUI.Label(bgRect, GetLowHpWarningText(), _lowHpStyle);
 
-                GUI.color = PrevColor;
+                GUI.color = prev;
             }
-
-
-
         }
 
+        // ───────────────── 설정 창 ─────────────────
+        private void DrawRadarSettingsWindow()
+        {
+            _settingsWindowRect = GUI.Window(
+                987654321,
+                _settingsWindowRect,
+                RadarSettingsWindowFunc,
+                "Enemy Radar 설정 (F6: 토글, F8: 닫기)"
+            );
+        }
+
+        private void RadarSettingsWindowFunc(int windowId)
+        {
+            // 이전 값 저장
+            float oldScale = _radarScale;
+            float oldOffX = _radarOffsetX;
+            float oldOffY = _radarOffsetY;
+
+            GUILayout.Label("레이더 크기");
+            _radarScale = GUILayout.HorizontalSlider(_radarScale, 0.6f, 1.6f);
+
+            GUILayout.Space(4f);
+            GUILayout.Label("가로 위치 조정");
+            _radarOffsetX = GUILayout.HorizontalSlider(_radarOffsetX, -200f, 200f);
+
+            GUILayout.Space(4f);
+            GUILayout.Label("세로 위치 조정");
+            _radarOffsetY = GUILayout.HorizontalSlider(_radarOffsetY, -200f, 200f);
+
+            GUILayout.Space(6f);
+            if (GUILayout.Button("기본값으로 초기화"))
+            {
+                _radarScale = 1.0f;
+                _radarOffsetX = 0f;
+                _radarOffsetY = 0f;
+            }
+            // 값이 바뀐 경우에만 파일 저장
+            if (Mathf.Abs(_radarScale - oldScale) > 0.0001f ||
+                Mathf.Abs(_radarOffsetX - oldOffX) > 0.0001f ||
+                Mathf.Abs(_radarOffsetY - oldOffY) > 0.0001f)
+            {
+                SaveRadarConfig();
+            }
+
+            GUI.DragWindow(new Rect(0, 0, 4000, 20));
+        }
 
         // ================== 캐릭터 스캔 ==================
-
         private FieldInfo GetTeamField(Type t)
         {
             FieldInfo fi;
@@ -479,7 +621,8 @@ namespace enemyradar
             }
         }
 
-        private void ScanCharacters()
+
+private void ScanCharacters()
         {
             _player = null;
             _enemies.Clear();
@@ -1299,12 +1442,12 @@ private static Color GetLootColorByTier(int tier)
             return new Color(1f, 0.9f, 0.3f, 0.95f);
 
         case 6: // 연한 빨강
-            return new Color(1f, 0.5f, 0.5f, 0.95f);
+                    return new Color(0.7f, 0.1f, 0.1f, 1.0f);
 
-        default: // 7 이상 = 진빨
-            return new Color(1f, 0.1f, 0.1f, 0.95f);
-    }
-}
+                default: // 7 이상 = 매우 진한 빨강
+                    return new Color(0.7f, 0.1f, 0.1f, 1.0f);
+            }
+        }
 
 // 디버그용 텍스트(로그에 tier 이름 찍을 때 사용)
 private static string GetLootTierName(int tier)
