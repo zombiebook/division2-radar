@@ -50,7 +50,7 @@ namespace enemyradar
         private float _nextLootScanTime;
 
         private const float EnemyScanInterval = 3f;   // 적 레이더는 3초마다
-        private const float LootScanInterval  = 1.5f; // 전리품 빔은 1.5초마다
+        private const float LootScanInterval  = 4.0f; // 전리품 빔은 1.5초마다
 
         private bool _hasTarget;
         private Transform _nearestEnemy;
@@ -79,6 +79,9 @@ namespace enemyradar
         // ===== 디버그 텍스트 스타일 =====
         private GUIStyle _labelStyle;
         private bool _styleReady;
+
+        // EnemyRadarHUD 클래스 필드들 사이 어딘가에 추가
+        private const bool DEBUG_LOOT_SCAN = false;
 
         // ===== 플레이어 HP 경고 =====
         private MonoBehaviour _playerHealthMb;
@@ -1094,16 +1097,14 @@ namespace enemyradar
 
                 CreateLootBeamForSpot(spot);
 
-                Debug.Log("[EnemyRadarHUD] LootSpot - name=" + name +
-                          ", scene=" + go.scene.name +
-                          ", bestQ=" + bestQ);
+             
 
                 // 너무 많이 찍히는 것 방지
                 if (lootCount >= 40)
                     break;
             }
 
-            Debug.Log("[EnemyRadarHUD] ScanLootWorld - enemyLoot count=" + lootCount);
+            
         }
 
 
