@@ -1419,38 +1419,45 @@ private void ScanCharacters()
         }
 
         // loot 품질 숫자 -> 점 색
-// bestQ(=tier)는 displayQuality 그대로 들어온다고 가정:
-// 2=초록, 3=파랑, 4=보라, 5=금, 6=연빨, 7=진빨
-private static Color GetLootColorByTier(int tier)
-{
-    // 0~1 이하는 "등급 없음"으로 회색 처리
-    if (tier <= 1)
-        return new Color(0.5f, 0.5f, 0.5f, 0.9f);
+        // bestQ(=tier)는 displayQuality 그대로 들어온다고 가정:
+        // 2=초록, 3=파랑, 4=보라, 5=금, 6=연빨, 7=진빨
+        private static Color GetLootColorByTier(int tier)
+        {
+            // 0~1 : White = FFFFFF00 (완전 투명, 등급 없음은 사실상 안 보이게)
+            if (tier <= 1)
+                return new Color(1f, 1f, 1f, 0f);
 
-    switch (tier)
-    {
-        case 2: // 초록
-            return new Color(0.3f, 1f, 0.3f, 0.95f);
+            switch (tier)
+            {
+                case 2: // Green = 7cff7c40
+                        // R=124,G=255,B=124,A=64
+                    return new Color(0.486f, 1.000f, 0.486f, 0.251f);
 
-        case 3: // 파랑
-            return new Color(0.3f, 0.6f, 1f, 0.95f);
+                case 3: // Blue = 7cd5ff40
+                        // R=124,G=213,B=255,A=64
+                    return new Color(0.486f, 0.835f, 1.000f, 0.251f);
 
-        case 4: // 보라
-            return new Color(0.75f, 0.3f, 1f, 0.95f);
+                case 4: // Purple = d0acff40
+                        // R=208,G=172,B=255,A=64
+                    return new Color(0.816f, 0.675f, 1.000f, 0.251f);
 
-        case 5: // 금색
-            return new Color(1f, 0.9f, 0.3f, 0.95f);
+                case 5: // Orange = ffdc2496
+                        // R=255,G=220,B=36,A=150
+                    return new Color(1.000f, 0.863f, 0.141f, 0.588f);
 
-        case 6: // 연한 빨강
-                    return new Color(0.7f, 0.1f, 0.1f, 1.0f);
+                case 6: // LightRed = ff585896
+                        // R=255,G=88,B=88,A=150
+                    return new Color(1.000f, 0.345f, 0.345f, 0.588f);
 
-                default: // 7 이상 = 매우 진한 빨강
-                    return new Color(0.7f, 0.1f, 0.1f, 1.0f);
+                default: // 7 이상 : Red = bb000096
+                         // R=187,G=0,B=0,A=150
+                    return new Color(0.733f, 0.000f, 0.000f, 0.588f);
             }
         }
 
-// 디버그용 텍스트(로그에 tier 이름 찍을 때 사용)
-private static string GetLootTierName(int tier)
+
+        // 디버그용 텍스트(로그에 tier 이름 찍을 때 사용)
+        private static string GetLootTierName(int tier)
 {
     if (tier <= 1) return "등급없음";
 
